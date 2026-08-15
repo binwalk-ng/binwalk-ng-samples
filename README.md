@@ -138,7 +138,8 @@ tree (dtb), u-boot uImage (+gzip body), pcapng.
 
 Formats covered as committed fixtures in `samples/` (no 26.04 tool can write
 them): arcadyan, csman (+decompression-bomb negative), eva (single/dual/
-secondary), matter_ota, Broadcom ProgramStore (+dual), RAR3 (plain + solid),
+secondary), matter_ota, Broadcom ProgramStore (+dual), RAR3 (plain + solid +
+DOS SFX), squashfs v2, s-record with S6 count record, multi-format BMP,
 romfs, YAFFS2.
 
 ## Generator notes

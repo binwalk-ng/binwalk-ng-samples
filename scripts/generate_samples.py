@@ -126,6 +126,7 @@ class Generator:
     FIXTURES = frozenset(
         {
             "arcadyan.bin",
+            "bmp.multiformat.bmp",
             "csman.bin",
             "csman_decompression_bomb.bin",
             "eva_dual_kernel.bin",
@@ -134,9 +135,12 @@ class Generator:
             "matter_ota.bin",
             "program_store.bin",
             "program_store.dual.bin",
+            "rar3.dos_sfx.exe",
             "rar3.rar",
             "rar3.solid.rar",
             "romfs.image",
+            "squashfs_v2.bin",
+            "srec_s6.hex",
             "yaffs2.image",
         }
     )

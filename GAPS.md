@@ -57,8 +57,8 @@ always produces it; elsewhere build it from source
 
 ## Not included but covered upstream
 
-Remaining upstream-only fixtures not re-created here: `squashfs_v2`
-(mksquashfs only writes v4; old squashfs-tools 2.x is a third-party-build
-candidate), Android sparse, and historical mixture files. (`png_malformed`
-is covered here as the generated `png.malformed.png`, an RAR3 pair and the
-firmware/fs formats covered by `samples/`.)
+Remaining upstream-only fixtures not re-created here: Android sparse, and
+historical mixture files. (`png_malformed` is covered here as the generated
+`png.malformed.png`, and the RAR3 pair, the RAR3 DOS SFX, squashfs_v2,
+the S6-count s-record, the multi-format BMP and the firmware/fs formats are
+covered as committed fixtures in `samples/`.)
