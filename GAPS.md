@@ -3,20 +3,23 @@
 These binwalk-ng signatures have no standard/common-tool generator. They are
 intentionally **not** generated here (per the "common tools only" rule). Each
 entry explains why and what would be needed to produce a real sample.
+Formats that ship as committed fixtures instead live in `samples/`,
+alongside the generated files.
 
 ## Vendor/proprietary firmware
 
 These formats are written by vendor-specific firmware packing tools that are
 not part of any mainstream distribution and often leaked/undocumented:
 
+- `arcadyan`, `csman` (incl. its decompression bomb), `eva`
+  (single/dual/secondary), `matter_ota`, `program_store` — **covered via
+  committed fixtures** in `samples/` (vendor tool output from upstream's
+  test corpus).
 - `tplink`, `dlink`, `dlk`, `dlch`, `seama`, `trx`, `shrs`, `palmos`,
-  `android_boot_image`, `hachiko`/`mem2isa` (matter_ota is upstream-tested),
-  `arcadyan`, `rdc`, `wince`, `gfd`, `iscu`...
-
-  Generating real ones requires the vendor's packing tool (e.g. OpenWrt's
-  outdated `mktplinkfw` / `trx` scripts) or firmware from a device.
-  Proof-of-hierarchy samples already exist upstream in binwalk-ng's
-  `tests/inputs/`.
+  `android_boot_image`, `hachiko`/`mem2isa`, `rdc`, `wince`, `gfd`,
+  `iscu`... — no fixture at all: generating real ones requires the vendor's
+  packing tool (e.g. OpenWrt's outdated `mktplinkfw` / `trx` scripts) or
+  firmware from a device.
 
 ## Operating-system/Apple/Windows-only tools
 
@@ -38,20 +41,24 @@ not part of any mainstream distribution and often leaked/undocumented:
 These signatures match ASCII-encoded initial value tables that occur inside
 real crypto implementations. A tool-pure way to produce them is compiling (with
 `gcc`) a program whose source embeds the public constant tables from
-(FIPS-197, RFC-1321, RFC-3174, RFC-1952). This is legitimate (the tables are
-public algorithm constants, not binwalk's code) but the samples are large and
-low value, so they're deferred.
+(FIPS-197, RFC-1321, RFC-3174, RFC-1952). This stays within the constraints
+(the tables are public algorithm constants, not binwalk's code), but the
+samples would be large and of limited value, so the format is deferred.
 
 ## Formats needing existing real-world files
 
-- Motorola S-record with the standard 'HDR'-style S0 record
-  (`S00600004844521B`): no common tool writes that exact S0 header;
-  `objcopy -O srec` writes a path-based S0 header, which is why this repo
-  registers the `srec_generic` signature instead.
+None remain. The standard 'HDR'-style S0 record (`S00600004844521B`) is
+covered by `srec_cat -header HDR` (the path-based S0 header that
+`objcopy -O srec` writes alone cannot produce it). Caveat: the `srecord` package is not on every host
+(e.g. Arch does not ship it), so the sample appears only when `srec_cat`
+is on `$PATH` — Ubuntu 26.04 ships it in universe, so the Docker image
+always produces it; elsewhere build it from source
+(https://sourceforge.net/projects/srecord) to activate it.
 
-## Not included but already covered upstream
+## Not included but covered upstream
 
-Formats with an existing tested sample in `tests/inputs/`: `cramfs`,
-`romfs`, qcow2, RAR (no FLOSS creator), 7-Zip (covered above), Arj, lzfse,
-Android sparse, mixtures etc. The generator here re-covers the subset with
-standard tools; the hand-made ones remain in binwalk-ng.
+Remaining upstream-only fixtures not re-created here: `squashfs_v2`
+(mksquashfs only writes v4; old squashfs-tools 2.x is a third-party-build
+candidate), Android sparse, and historical mixture files. (`png_malformed`
+is covered here as the generated `png.malformed.png`, an RAR3 pair and the
+firmware/fs formats covered by `samples/`.)
