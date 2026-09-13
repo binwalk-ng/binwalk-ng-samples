@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         build-essential binutils python3 \
         zip unzip cpio tar gzip bzip2 xz-utils lz4 zstd lzfse lzop ncompress \
-        7zip gcab genisoimage dosfstools ntfs-3g mtd-utils squashfs-tools \
+        7zip gcab genisoimage dosfstools mtools ntfs-3g mtd-utils squashfs-tools \
         gdisk u-boot-tools imagemagick wireshark-common \
         gcc-mingw-w64-x86-64 device-tree-compiler \
         cryptsetup gnupg openssl libfaketime srecord \

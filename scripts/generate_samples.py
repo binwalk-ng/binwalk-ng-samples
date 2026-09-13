@@ -717,17 +717,70 @@ class Generator:
                         str(image),
                     ]
                 )
-            self.emit("fat", "fat.image", "mkfs.vfat -i fixed (1MB)")
+            if image.is_file() and shutil.which("mmd") and shutil.which("mcopy"):
+                # mkfs.vfat only formats; populate offline with mtools
+                # (no mount needed). Source mtimes are pinned via pin_tree,
+                # directory timestamps come from the faketime-pinned clock.
+                # Names are 8.3-safe so no LFN entries are written.
+                run_tool(["mmd", "-i", str(image), "::/docs"])
+                run_tool(
+                    ["mcopy", "-i", str(image), str(fs_root / "readme.txt"), "::/"]
+                )
+                run_tool(
+                    [
+                        "mcopy",
+                        "-i",
+                        str(image),
+                        str(fs_root / "docs" / "install.txt"),
+                        "::/docs/",
+                    ]
+                )
+                payload_gz = fs_root / "docs" / "payload.gz"
+                if payload_gz.is_file():
+                    run_tool(["mcopy", "-i", str(image), str(payload_gz), "::/docs/"])
+            elif image.is_file():
+                print(
+                    "! warning: no tool available ('mmd' / 'mcopy') "
+                    "-- fat.image will be empty",
+                    file=sys.stderr,
+                )
+            self.emit("fat", "fat.image", "mkfs.vfat -i fixed + mtools (1MB)")
 
         if require_tool("mkntfs"):
             image = self.blank("ntfs.image", 2 * 1024**2)
             run_tool(["mkntfs", "-q", "-F", "-L", "BINWALK", str(image)])
+            if image.is_file() and shutil.which("ntfscp"):
+                # mkntfs only formats; populate offline with ntfscp (part of
+                # ntfs-3g, no mount needed). ntfs-3g ships no offline mkdir,
+                # so docs/ is flattened into root (install.txt, payload.gz).
+                # Timestamps come from the faketime-pinned clock.
+                run_tool(
+                    ["ntfscp", str(image), str(fs_root / "readme.txt"), "readme.txt"]
+                )
+                run_tool(
+                    [
+                        "ntfscp",
+                        str(image),
+                        str(fs_root / "docs" / "install.txt"),
+                        "install.txt",
+                    ]
+                )
+                payload_gz = fs_root / "docs" / "payload.gz"
+                if payload_gz.is_file():
+                    run_tool(["ntfscp", str(image), str(payload_gz), "payload.gz"])
+            elif image.is_file():
+                print(
+                    "! warning: no tool available ('ntfscp') "
+                    "-- ntfs.image will be empty",
+                    file=sys.stderr,
+                )
             if image.is_file():
                 # Zero the random NTFS volume serial (boot sector bytes 0x48..0x50).
+                # Done after ntfscp so final bytes stay deterministic.
                 data = bytearray(image.read_bytes())
                 data[0x48:0x50] = b"\x00" * 8
                 image.write_bytes(bytes(data))
-            self.emit("ntfs", "ntfs.image", "mkntfs -F (2MB, serial zeroed)")
+            self.emit("ntfs", "ntfs.image", "mkntfs -F + ntfscp (2MB, serial zeroed)")
 
         # btrfs intentionally omitted: mkfs.btrfs needs a >=72MB image.
 
