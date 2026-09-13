@@ -42,17 +42,25 @@ uses, so any machine with Docker produces the same artifacts. The build
 itself also runs the generator, so the samples are available in the image
 under `/artifacts` (retrievable with `docker cp`).
 
-Generation is byte-reproducible: two runs produce identical samples, byte
-for byte, whether run on this host or in Docker. The wall clock is pinned to
+Generation is byte-reproducible inside the Docker image: two runs produce
+identical samples, byte for byte. On other hosts two leaks remain
+host-dependent: cpio `dev` fields (only `ino` is pinned) and the pcapng SHB
+OS/hardware strings (`uname -r`/CPU; only the input path is pinned). The
+wall clock is pinned to
 a fixed date, `2025-04-30 15:32:03` (`faketime -f '2025-04-30 15:32:03'`,
 and `libfaketime` is baked into the Dockerfile), so every timestamp a format
 can store — zip/lzop headers, filesystem superblock times, uImage/pcap/GPT
 headers, X.509 validity dates, GnuPG signature timestamps — is constant.
 Everything else is pinned per format: a fixed OpenSSL salt (`-S`), a fixed
 LUKS uuid/pbkdf iterations (with the RNG-written digest, salts and key
-material zeroed afterwards), fixed ext4/gpt/ntfs UUIDs, vendored RSA + GPG
+material zeroed afterwards), fixed ext4/gpt UUIDs, zeroed NTFS serial
+(after `ntfscp`), fixed FAT volume id (`-i`), vendored RSA + GPG
 seed keys instead of per-run generation, an ext4 hash seed, `--mtime=@0`
-ustar and `-mkfs-time 0` squashfs, `-n` gzip, cpio inode pinning, a fixed
+ustar and `-mkfs-time 0` squashfs, `-n` gzip, cpio inode pinning (`dev`
+stays host-dependent), FAT populated via `mtools` (`8.3`-safe names),
+NTFS populated via `ntfscp` (flattened to root — `ntfs-3g` has no offline
+`mkdir`), pcapng input-path pinning (OS/hardware strings stay
+host-dependent), a fixed
 UBI image sequence (`ubinize -Q`), a pinned MBR disk id, a repinned PDF
 `/ID`, the sox INFO chunk stripped, the OpenSSL `Salted__` header restored
 when the installed OpenSSL omits it with `-S`, and a fixed-seed PRNG for
@@ -76,9 +84,9 @@ The only "content" involved is:
 | seed | content | used for |
 |------|---------|----------|
 | `scripts/data/extraction_reference.txt` | this repo's fixed payload text, vendored alongside the generator so generation never depends on an external checkout | the single file inside every archive & filesystem, and the input of every compression stream |
-| `main.c` | one-line `int main(...) { return 0; }` | compiled by gcc / mingw / objcopy into ELF, PE and S-record samples |
-| `msg.txt` | `signed message` | signed by `openssl` / `gpg` |
-| `lzfse.txt` | 1000 spaces + `Testing, 1, 2, 3...` repeated 100× | input of the `lzfse` stream (1000-space prefix, then repeated lines) |
+| `main.c` (inline) | one-line `int main(...) { return 0; }` | compiled by gcc / mingw / objcopy into ELF, PE and S-record samples |
+| `msg.txt` (inline) | `signed message` | signed by `openssl` / `gpg` |
+| `lzfse` input (inline) | 1000 spaces + `Testing, 1, 2, 3...` repeated 100× | input of the `lzfse` stream (1000-space prefix, then repeated lines) |
 | `scripts/data/rsa_key.pem` | ephemeral 2048-bit RSA key, generated once | `pem.private_key.pem` (byte-copy), the `pem.certificate.pem` signer, `pem.public_key.pem` |
 | `scripts/data/gpg.key` | ephemeral GPG keypair, generated once under the pinned clock | `gpg.signed.gpg` (signature pinned via `--faked-system-time`; the key's creation date is the pinned date, keeping gpg's signing clock within the key's validity period) |
 | seeded bytes | fixed-seed SHA-256 counter stream | zstd / lzop inputs (need incompressible data) |
@@ -97,7 +105,8 @@ binwalk's more complex logic:
 - **Nested containers** — `tarball.tar.gz` (tar inside gzip), `zip.archive.zip`
   (contains a gzip member), u-boot with a gzip-compressed kernel
   (`uimage.arm.gzip.ub`), and filesystems whose trees contain `docs/` plus a
-  nested `payload.gz`.
+  nested `payload.gz` (NTFS exception: flattened to root since `ntfs-3g`
+  ships no offline `mkdir`).
 - **Truncated inputs** — `tarball.truncated.tar` and `zip.truncated.zip`
   (tail cut) are still extractable/detected. `png.malformed.png` is the
   inverse: cut inside the first IDAT chunk, so the chunk walk must reject
