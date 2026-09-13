@@ -388,13 +388,18 @@ class Generator:
             tarball = self.output_dir / "tarball.archive.tar"
 
             # Nested: gzip of the same tarball (tar inside gzip stream).
-            result = run_tool(
-                ["gzip", "-9nfc", str(tarball)],
-                stdout=subprocess.PIPE,
-            )
-            if result.returncode == 0 and tarball.is_file():
-                self.write("tarball.tar.gz", result.stdout)
-                self.emit("gzip", "tarball.tar.gz", "gzip -9n of tar (nested)")
+            # Gated on gzip too: run_tool raises FileNotFoundError for a
+            # missing binary instead of returning, so an ungated call would
+            # abort the whole run on gzip-less hosts.
+            gzip_tool = require_tool("gzip")
+            if gzip_tool and tar_res.returncode == 0 and tarball.is_file():
+                result = run_tool(
+                    [gzip_tool, "-9nfc", str(tarball)],
+                    stdout=subprocess.PIPE,
+                )
+                if result.returncode == 0:
+                    self.write("tarball.tar.gz", result.stdout)
+                    self.emit("gzip", "tarball.tar.gz", "gzip -9n of tar (nested)")
 
             # Truncated tar: keep a full header group + partial tail.
             if tar_res.returncode == 0 and tarball.is_file():
@@ -424,11 +429,14 @@ class Generator:
             zip_src.mkdir()
             (zip_src / "readme.txt").write_bytes(self.reference)
             (zip_src / "bin").mkdir()
-            gzip_result = run_tool(
-                ["gzip", "-9nfc", str(self.payload_file)], stdout=subprocess.PIPE
-            )
-            if gzip_result.returncode == 0:
-                (zip_src / "bin" / "payload.gz").write_bytes(gzip_result.stdout)
+            # Same missing-binary hazard as the tar-nested gzip: gate first.
+            gzip_tool = require_tool("gzip")
+            if gzip_tool:
+                gzip_result = run_tool(
+                    [gzip_tool, "-9nfc", str(self.payload_file)], stdout=subprocess.PIPE
+                )
+                if gzip_result.returncode == 0:
+                    (zip_src / "bin" / "payload.gz").write_bytes(gzip_result.stdout)
             pin_tree(zip_src)
             # No -r: InfoZIP stamps directory entries with its own clock,
             # which is not reproducible. An explicit file list yields no
@@ -676,11 +684,15 @@ class Generator:
         docs = fs_root / "docs"
         docs.mkdir()
         (docs / "install.txt").write_text("installed documentation\n" * 20)
-        gzip_stream = run_tool(
-            ["gzip", "-9nfc", str(self.payload_file)], stdout=subprocess.PIPE
-        )
-        if gzip_stream.returncode == 0:
-            (docs / "payload.gz").write_bytes(gzip_stream.stdout)
+        # Gated: filesystems() itself has no tool gate, and run_tool raises
+        # for a missing binary instead of returning.
+        gzip_tool = require_tool("gzip")
+        if gzip_tool:
+            gzip_stream = run_tool(
+                [gzip_tool, "-9nfc", str(self.payload_file)], stdout=subprocess.PIPE
+            )
+            if gzip_stream.returncode == 0:
+                (docs / "payload.gz").write_bytes(gzip_stream.stdout)
         pin_tree(fs_root)
 
         if require_tool("mkfs.ext4"):
@@ -1374,13 +1386,12 @@ class Generator:
         # (and patching it afterwards corrupts block lengths when TMPDIR is
         # not /tmp). "packet.hex" is fixed.
         run_tool([tool, "-q", "-F", "pcapng", "packet.hex", str(capture)], cwd=self.workdir)
-        if not capture.exists():
-            run_tool([tool, "-q", "packet.hex", str(capture)], cwd=self.workdir)
         if capture.exists():
-            # text2pcap records host metadata (uname -r, CPU, Wireshark
-            # version) in the SHB hardware/OS/userappl options; rebuild the
-            # SHB with pinned values so Docker builds agree on any host.
-            self.pin_pcapng_host_options(capture)
+            # Only normalize real pcapng (SHB magic 0x0A0D0D0A): a partial
+            # failure or a stale file must be preserved as-is, never fed
+            # through the SHB rewriter.
+            if capture.read_bytes()[:4] == b"\x0a\x0d\x0d\x0a":
+                self.pin_pcapng_host_options(capture)
         self.emit("pcapng", "pcapng.ipv4.pcapng", "text2pcap -F pcapng")
 
     def pin_pcapng_host_options(self, capture: Path) -> None:
