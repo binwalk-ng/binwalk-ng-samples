@@ -18,9 +18,10 @@ Dockerfile                     builds the full generator environment (ubuntu:26.
 scripts/
   generate_samples.py          produce everything in samples/ (common tools only)
   data/extraction_reference.txt  the shared payload text (vendored, see "Data")
-samples/                       all payload files: generated samples (rewritten
-                               every run) and committed fixtures for formats
-                               with no generator (see GAPS.md)
+samples/                       all payload files: generated samples (overwritten
+                               in place when regenerated; committed files
+                               survive hosts missing a tool) and committed
+                               fixtures for formats with no generator (see GAPS.md)
 ```
 
 ## Reproducible generation
@@ -40,13 +41,13 @@ docker run --rm -v "$PWD/samples:/artifacts" binwalk-ng-samples
 The Dockerfile pins `ubuntu:26.04` and installs every tool the generator
 uses, so any machine with Docker produces the same artifacts. The build
 itself also runs the generator, so the samples are available in the image
-under `/artifacts` (retrievable with `docker cp`).
+under `/artifacts` (retrievable with `docker cp`). Committed fixtures are
+seeded into `/artifacts` before generation, so the image holds the full set
+even starting from an empty directory.
 
-Generation is byte-reproducible inside the Docker image: two runs produce
-identical samples, byte for byte. On other hosts two leaks remain
-host-dependent: cpio `dev` fields (only `ino` is pinned) and the pcapng SHB
-OS/hardware strings (`uname -r`/CPU; only the input path is pinned). The
-wall clock is pinned to
+Generation is byte-reproducible for a given toolset (in practice: the
+same Docker image build). Fresh `docker build`s can still drift when
+`ubuntu:26.04`/APT resolves newer tool versions. The wall clock is pinned to
 a fixed date, `2025-04-30 15:32:03` (`faketime -f '2025-04-30 15:32:03'`,
 and `libfaketime` is baked into the Dockerfile), so every timestamp a format
 can store — zip/lzop headers, filesystem superblock times, uImage/pcap/GPT
@@ -56,11 +57,11 @@ LUKS uuid/pbkdf iterations (with the RNG-written digest, salts and key
 material zeroed afterwards), fixed ext4/gpt UUIDs, zeroed NTFS serial
 (after `ntfscp`), fixed FAT volume id (`-i`), vendored RSA + GPG
 seed keys instead of per-run generation, an ext4 hash seed, `--mtime=@0`
-ustar and `-mkfs-time 0` squashfs, `-n` gzip, cpio inode pinning (`dev`
-stays host-dependent), FAT populated via `mtools` (`8.3`-safe names),
+ustar and `-mkfs-time 0` squashfs, `-n` gzip, cpio inode+dev pinning,
+FAT populated via `mtools` (`8.3`-safe names),
 NTFS populated via `ntfscp` (flattened to root — `ntfs-3g` has no offline
-`mkdir`), pcapng input-path pinning (OS/hardware strings stay
-host-dependent), a fixed
+`mkdir`), pcapng relative input path plus normalized SHB host options
+(hardware/OS/userappl rebuilt with fixed values), a fixed
 UBI image sequence (`ubinize -Q`), a pinned MBR disk id, a repinned PDF
 `/ID`, the sox INFO chunk stripped, the OpenSSL `Salted__` header restored
 when the installed OpenSSL omits it with `-S`, and a fixed-seed PRNG for

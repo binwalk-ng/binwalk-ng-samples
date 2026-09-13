@@ -50,8 +50,8 @@ samples would be large and of limited value, so the format is deferred.
 None remain. The standard 'HDR'-style S0 record (`S00600004844521B`) is
 covered by `srec_cat -header HDR` (the path-based S0 header that
 `objcopy -O srec` writes alone cannot produce it). Caveat: the `srecord` package is not on every host
-(e.g. Arch does not ship it), so the sample appears only when `srec_cat`
-is on `$PATH` — Ubuntu 26.04 ships it in universe, so the Docker image
+(e.g. Arch does not ship it), so a fresh output dir gains the sample only when `srec_cat`
+is on `$PATH` (an existing checkout keeps its last generated copy) — Ubuntu 26.04 ships it in universe, so the Docker image
 always produces it; elsewhere build it from source
 (https://sourceforge.net/projects/srecord) to activate it.
 

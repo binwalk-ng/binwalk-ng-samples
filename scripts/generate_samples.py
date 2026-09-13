@@ -148,9 +148,10 @@ class Generator:
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
 
-        for p in output_dir.glob("*"):
-            if p.is_file() and p.name not in Generator.FIXTURES:
-                p.unlink()  # rewrite generated samples from scratch
+        # Never wipe the output dir up front: committed samples are the
+        # fallback on hosts missing a tool, and deleting them before the
+        # tool check would destroy what this run cannot replace. Samples
+        # are overwritten in place when (and only when) regenerated.
         output_dir.mkdir(parents=True, exist_ok=True)
 
         self.workdir = Path(tempfile.mkdtemp(prefix="bns-"))
@@ -210,9 +211,10 @@ class Generator:
             # gzip stream at a non-zero offset (zero-padded via dd/cat).
             pad = self.workdir / "pad.bin"
             run_tool(["dd", "if=/dev/zero", f"of={pad}", "bs=4096", "count=1"])
-            if pad.is_file() and result.returncode == 0:
+            gz = self.output_dir / "gzip.data.gz"
+            if pad.is_file() and result.returncode == 0 and gz.is_file():
                 cat = run_tool(
-                    ["cat", str(pad), str(self.output_dir / "gzip.data.gz")],
+                    ["cat", str(pad), str(gz)],
                     stdout=subprocess.PIPE,
                 )
                 if cat.returncode == 0:
@@ -224,8 +226,8 @@ class Generator:
                     )
 
             # trailing garbage that extraction must stop before.
-            if result.returncode == 0:
-                trailing = (self.output_dir / "gzip.data.gz").read_bytes()
+            if result.returncode == 0 and gz.is_file():
+                trailing = gz.read_bytes()
                 trailing += b"TRAILING GARBAGE DATA THAT SHOULD BE IGNORED"
                 self.write("gzip.trailing.bin", trailing)
                 self.emit(
@@ -259,25 +261,27 @@ class Generator:
             self.emit("lzma", "lzma.data.lzma", "xz --format=lzma -9")
 
         if require_tool("lz4"):
-            run_tool(
+            res = run_tool(
                 [
                     "lz4",
                     "-q",
+                    "-f",
                     str(self.payload_file),
                     str(self.output_dir / "lz4.data.lz4"),
                 ]
             )
             self.emit("lz4", "lz4.data.lz4", "lz4")
-            source = (self.output_dir / "lz4.data.lz4").read_bytes()
-            self.write("lz4.trailing.lz4", source + b"LZ4 TRAILING GARBAGE DATA")
-            self.emit("lz4", "lz4.trailing.lz4", "lz4 + trailing garbage")
+            src = self.output_dir / "lz4.data.lz4"
+            if res.returncode == 0 and src.is_file():
+                self.write("lz4.trailing.lz4", src.read_bytes() + b"LZ4 TRAILING GARBAGE DATA")
+                self.emit("lz4", "lz4.trailing.lz4", "lz4 + trailing garbage")
 
         if require_tool("zstd"):
             # binwalk requires >= 2 zstd blocks; --zstd=wlog=14 caps block size
             # at 16KB so a 40KB incompressible input yields multiple blocks.
             incompressible = self.workdir / "zstd.big"
             incompressible.write_bytes(seeded_bytes("zstd", 40 * 1024))
-            run_tool(
+            res = run_tool(
                 [
                     "zstd",
                     "-q",
@@ -290,18 +294,20 @@ class Generator:
             )
             self.emit("zstd", "zstd.data.zst", "zstd --zstd=wlog=14 (2+ blocks)")
 
-            source = (self.output_dir / "zstd.data.zst").read_bytes()
-            self.write("zstd.trailing.zst", source + b"ZSTD TRAILING GARBAGE DATA")
-            self.emit("zstd", "zstd.trailing.zst", "zstd + trailing garbage")
+            src = self.output_dir / "zstd.data.zst"
+            if res.returncode == 0 and src.is_file():
+                self.write("zstd.trailing.zst", src.read_bytes() + b"ZSTD TRAILING GARBAGE DATA")
+                self.emit("zstd", "zstd.trailing.zst", "zstd + trailing garbage")
 
         if require_tool("lzop"):
             # lzop emits one lzo block per 256KB chunk; 300KB -> 2 blocks.
             incompressible = self.workdir / "lzop.bin"
             incompressible.write_bytes(seeded_bytes("lzop", 300 * 1024))
-            run_tool(
+            res = run_tool(
                 [
                     "lzop",
                     "-q",
+                    "-f",
                     "-o",
                     str(self.output_dir / "lzop.data.lzo"),
                     str(incompressible),
@@ -360,7 +366,7 @@ class Generator:
 
         if require_tool("tar"):
             target = str(self.output_dir / "tarball.archive.tar")
-            run_tool(
+            tar_res = run_tool(
                 [
                     "tar",
                     "-cf",
@@ -379,20 +385,22 @@ class Generator:
                 "tarball.archive.tar",
                 "tar ustar (pinned mtime, exec + sticky-dir tree)",
             )
+            tarball = self.output_dir / "tarball.archive.tar"
 
             # Nested: gzip of the same tarball (tar inside gzip stream).
             result = run_tool(
-                ["gzip", "-9nfc", str(self.output_dir / "tarball.archive.tar")],
+                ["gzip", "-9nfc", str(tarball)],
                 stdout=subprocess.PIPE,
             )
-            if result.returncode == 0:
+            if result.returncode == 0 and tarball.is_file():
                 self.write("tarball.tar.gz", result.stdout)
                 self.emit("gzip", "tarball.tar.gz", "gzip -9n of tar (nested)")
 
             # Truncated tar: keep a full header group + partial tail.
-            full = (self.output_dir / "tarball.archive.tar").read_bytes()
-            self.write("tarball.truncated.tar", full[: len(full) - 300])
-            self.emit("tarball", "tarball.truncated.tar", "tar -cf then truncated tail")
+            if tar_res.returncode == 0 and tarball.is_file():
+                full = tarball.read_bytes()
+                self.write("tarball.truncated.tar", full[: len(full) - 300])
+                self.emit("tarball", "tarball.truncated.tar", "tar -cf then truncated tail")
 
         if require_tool("cpio"):
             result = run_tool(
@@ -402,11 +410,14 @@ class Generator:
                 stdout=subprocess.PIPE,
             )
             if result.returncode == 0:
-                # newc embeds the source inode number; pin it (8 hex chars).
+                # newc embeds the source inode and device numbers; pin them
+                # (each an 8-char hex field) so the header is host-independent.
                 cpio_data = bytearray(result.stdout)
                 cpio_data[6:14] = b"00000001"
+                cpio_data[62:70] = b"00000000"
+                cpio_data[70:78] = b"00000000"
                 self.write("cpio.newc.cpio", bytes(cpio_data))
-            self.emit("cpio", "cpio.newc.cpio", "cpio -o -H newc (inode pinned)")
+            self.emit("cpio", "cpio.newc.cpio", "cpio -o -H newc (inode+dev pinned)")
 
         if require_tool("zip"):
             zip_src = self.workdir / "zip-src"
@@ -434,9 +445,11 @@ class Generator:
             )
             self.emit("zip", "zip.archive.zip", "zip -r (tree + nested gzip)")
 
-            full_zip = (self.output_dir / "zip.archive.zip").read_bytes()
-            self.write("zip.truncated.zip", full_zip[: len(full_zip) // 2])
-            self.emit("zip", "zip.truncated.zip", "zip -r then truncated tail")
+            full_zip_p = self.output_dir / "zip.archive.zip"
+            if full_zip_p.is_file():
+                full_zip = full_zip_p.read_bytes()
+                self.write("zip.truncated.zip", full_zip[: len(full_zip) // 2])
+                self.emit("zip", "zip.truncated.zip", "zip -r then truncated tail")
 
         arj = require_tool("arj")
         if arj:
@@ -672,7 +685,7 @@ class Generator:
 
         if require_tool("mkfs.ext4"):
             image = self.blank("ext4.image", 2 * 1024**2)
-            run_tool(
+            res = run_tool(
                 [
                     "mkfs.ext4",
                     "-q",
@@ -686,8 +699,8 @@ class Generator:
                     str(image),
                 ]
             )
-            if not image.is_file():
-                run_tool(
+            if res.returncode != 0:
+                res = run_tool(
                     [
                         "mkfs.ext4",
                         "-q",
@@ -699,13 +712,15 @@ class Generator:
                         str(image),
                     ]
                 )
+                if res.returncode != 0 and image.is_file():
+                    image.unlink()  # never report a blank/failed format as a sample
             self.emit("ext", "ext4.image", "mkfs.ext4 -d -U fixed (2MB)")
 
         if require_tool("mkfs.vfat"):
             image = self.blank("fat.image", 1024**2)
-            run_tool(["mkfs.vfat", "-n", "BINWALK", "-i", "12345678", str(image)])
-            if not image.is_file():
-                run_tool(
+            res = run_tool(["mkfs.vfat", "-n", "BINWALK", "-i", "12345678", str(image)])
+            if res.returncode != 0:
+                res = run_tool(
                     [
                         "mkfs.vfat",
                         "-F",
@@ -717,7 +732,10 @@ class Generator:
                         str(image),
                     ]
                 )
-            if image.is_file() and shutil.which("mmd") and shutil.which("mcopy"):
+            if res.returncode != 0:
+                if image.is_file():
+                    image.unlink()  # never report a blank/failed format as a sample
+            elif shutil.which("mmd") and shutil.which("mcopy"):
                 # mkfs.vfat only formats; populate offline with mtools
                 # (no mount needed). Source mtimes are pinned via pin_tree,
                 # directory timestamps come from the faketime-pinned clock.
@@ -748,8 +766,11 @@ class Generator:
 
         if require_tool("mkntfs"):
             image = self.blank("ntfs.image", 2 * 1024**2)
-            run_tool(["mkntfs", "-q", "-F", "-L", "BINWALK", str(image)])
-            if image.is_file() and shutil.which("ntfscp"):
+            res = run_tool(["mkntfs", "-q", "-F", "-L", "BINWALK", str(image)])
+            if res.returncode != 0:
+                if image.is_file():
+                    image.unlink()  # never report a blank/failed format as a sample
+            elif shutil.which("ntfscp"):
                 # mkntfs only formats; populate offline with ntfscp (part of
                 # ntfs-3g, no mount needed). ntfs-3g ships no offline mkdir,
                 # so docs/ is flattened into root (install.txt, payload.gz).
@@ -836,8 +857,11 @@ class Generator:
             image = self.output_dir / "squashfs.image"
             # -mkfs-time is the modern name (4.6+); older builds only know
             # -fixed-time, so fall back when the current tool rejects it.
+            # -noappend: never append to a previous image (without the old
+            # upfront wipe, a rerun onto an existing file would stack a
+            # second copy of the tree next to the first).
             result = run_tool(
-                ["mksquashfs", str(fs_root), str(image), "-noD", "-mkfs-time", "0"]
+                ["mksquashfs", str(fs_root), str(image), "-noD", "-noappend", "-mkfs-time", "0"]
             )
             if result.returncode != 0:
                 run_tool(
@@ -846,6 +870,7 @@ class Generator:
                         str(fs_root),
                         str(image),
                         "-noD",
+                        "-noappend",
                         "-fixed-time",
                         "0",
                     ]
@@ -1003,7 +1028,7 @@ class Generator:
         print("== partition tables")
         if require_tool("sgdisk"):
             image = self.blank("efigpt.image", 4 * 1024**2)
-            run_tool(
+            res = run_tool(
                 [
                     "sgdisk",
                     "-o",
@@ -1024,12 +1049,17 @@ class Generator:
                     str(image),
                 ]
             )
+            if res.returncode != 0 and image.is_file():
+                image.unlink()  # never report a blank/failed format as a sample
             self.emit("efigpt", "efigpt.image", "sgdisk -o (GPT, 4MB)")
 
         if require_tool("sfdisk"):
             image = self.blank("mbr.image", 8 * 1024**2)
-            run_tool(["sfdisk", str(image)], stdin_data=b"type=83\n")
-            if image.is_file():
+            res = run_tool(["sfdisk", str(image)], stdin_data=b"type=83\n")
+            if res.returncode != 0:
+                if image.is_file():
+                    image.unlink()  # never report a blank/failed format as a sample
+            elif image.is_file():
                 # sfdisk stamps a random disk id (boot sector bytes 0x1B8..);
                 # pin it to a constant so two runs are byte-identical.
                 data = bytearray(image.read_bytes())
@@ -1154,7 +1184,7 @@ class Generator:
 
         if require_tool("cryptsetup"):
             image = self.blank("luks.luks1.img", 2 * 1024**2)
-            run_tool(
+            res = run_tool(
                 [
                     "cryptsetup",
                     "luksFormat",
@@ -1169,7 +1199,10 @@ class Generator:
                 ],
                 stdin_data=b"xxxxxxxx\n",
             )
-            if image.is_file():
+            if res.returncode != 0:
+                if image.is_file():
+                    image.unlink()  # never report a blank/failed format as a sample
+            elif image.is_file():
                 self.zero_luks_randomness(image)
             self.emit(
                 "luks",
@@ -1336,16 +1369,67 @@ class Generator:
         hex_file = self.workdir / "packet.hex"
         hex_file.write_text(packet)
         capture = self.output_dir / "pcapng.ipv4.pcapng"
-        run_tool([tool, "-q", "-F", "pcapng", str(hex_file), str(capture)])
+        # Relative input name with cwd=workdir: text2pcap embeds the path in
+        # a comment option, so an absolute mkdtemp path would vary per run
+        # (and patching it afterwards corrupts block lengths when TMPDIR is
+        # not /tmp). "packet.hex" is fixed.
+        run_tool([tool, "-q", "-F", "pcapng", "packet.hex", str(capture)], cwd=self.workdir)
         if not capture.exists():
-            run_tool([tool, "-q", str(hex_file), str(capture)])
+            run_tool([tool, "-q", "packet.hex", str(capture)], cwd=self.workdir)
         if capture.exists():
-            # text2pcap embeds the input path in a file-comment option; the
-            # 8-char mkdtemp suffix varies per run, so pin it to a fixed one.
-            raw = capture.read_bytes()
-            raw = raw.replace(str(hex_file).encode(), b"/tmp/bns-00000000/packet.hex")
-            capture.write_bytes(raw)
+            # text2pcap records host metadata (uname -r, CPU, Wireshark
+            # version) in the SHB hardware/OS/userappl options; rebuild the
+            # SHB with pinned values so Docker builds agree on any host.
+            self.pin_pcapng_host_options(capture)
         self.emit("pcapng", "pcapng.ipv4.pcapng", "text2pcap -F pcapng")
+
+    def pin_pcapng_host_options(self, capture: Path) -> None:
+        """Rebuild pcapng SHBs with pinned hardware/OS/userappl options.
+
+        Option lengths vary per host (kernel/CPU/Wireshark strings), so
+        length-preserving patching cannot converge: rewrite the option
+        list with fixed values and update the block total lengths."""
+        data = capture.read_bytes()
+        out = bytearray()
+        off = 0
+        while off + 12 <= len(data):
+            btype, blen = struct.unpack_from("<II", data, off)
+            if blen < 12 or off + blen > len(data):
+                break
+            body = data[off : off + blen]
+            if btype == 0x0A0D0D0A and blen >= 28:
+                opts = body[24 : blen - 4]
+                new_opts = bytearray()
+                o = 0
+                seen_end = False
+                while o + 4 <= len(opts):
+                    code, olen = struct.unpack_from("<HH", opts, o)
+                    vlen = olen + (4 - olen % 4) % 4
+                    if o + 4 + vlen > len(opts):
+                        break
+                    if code == 0:
+                        new_opts += opts[o : o + 4]
+                        seen_end = True
+                        break
+                    val = opts[o + 4 : o + 4 + olen]
+                    if code == 2:
+                        val = b"binwalk-ng CPU"
+                    elif code == 3:
+                        val = b"binwalk-ng OS"
+                    elif code == 4:
+                        val = b"binwalk-ng text2pcap"
+                    new_opts += struct.pack("<HH", code, len(val))
+                    new_opts += val + b"\x00" * ((4 - len(val) % 4) % 4)
+                    o += 4 + vlen
+                if not seen_end:
+                    new_opts += b"\x00\x00\x00\x00"
+                new_blen = 24 + len(new_opts) + 4
+                out += body[:4] + struct.pack("<I", new_blen) + body[8:24]
+                out += bytes(new_opts) + struct.pack("<I", new_blen)
+            else:
+                out += body
+            off += blen
+        capture.write_bytes(bytes(out))
 
     # -- helpers ---------------------------------------------------------------
 

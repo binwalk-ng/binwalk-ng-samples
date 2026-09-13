@@ -22,7 +22,14 @@ RUN lib="$(find /usr/lib -name 'libfaketime.so*' | head -n1)" \
 
 WORKDIR /opt/ng-samples
 COPY scripts/ /opt/ng-samples/scripts/
+# Seed committed fixtures: Generator preserves FIXTURES but never creates
+# them, so builds starting from an empty /artifacts would omit fixture-only
+# samples (srec_s6.hex, RAR3, ...). `cp -an` seeds only missing files, so a
+# mounted checkout keeps its own copies.
+COPY samples/ /opt/ng-samples/samples-seed/
 
-RUN python3 scripts/generate_samples.py /artifacts
+RUN mkdir -p /artifacts \
+    && cp -an /opt/ng-samples/samples-seed/. /artifacts/ \
+    && python3 scripts/generate_samples.py /artifacts
 
-CMD ["python3", "scripts/generate_samples.py", "/artifacts"]
+CMD ["sh", "-c", "cp -an /opt/ng-samples/samples-seed/. /artifacts/ 2>/dev/null || true; exec python3 scripts/generate_samples.py /artifacts"]
